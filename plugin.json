@@ -1,11 +1,11 @@
 {
-  "id": "lufs_meter",
+  "id": "lufs-meter",
   "name": "LUFS Meter",
-  "version": "1.5.1",
+  "version": "1.5.2",
 
   "nav": {
     "label": "LUFS Meter",
-    "screen": "plugin-lufs_meter"
+    "screen": "plugin-lufs-meter"
   },
   "screen":  "screen.html",
   "script":  "screen.js",

@@ -2,7 +2,7 @@
 
 > Real-time LUFS metering and automatic loudness normalisation for [Slopsmith](https://github.com/slopsmith/slopsmith).
 
-**Version:** 1.5.1 · **Plugin ID:** `lufs_meter` · **Author:** zagatozee
+**Version:** 1.5.2 · **Plugin ID:** `lufs-meter` · **Author:** zagatozee
 
 ---
 
@@ -27,13 +27,21 @@ Rocksmith CDLC songs vary wildly in volume. One song is ear-splittingly loud, th
 
 ## Installation
 
-```bash
-cd /path/to/slopsmith/plugins
-git clone https://github.com/zagatozee/slopsmith-plugin-lufs-meter.git lufs_meter
-docker compose restart
+### Via Plugin Manager (recommended)
+
+If you have the [Update Manager plugin](https://github.com/masc0t/slopsmith-update-manager) installed, paste the repo URL into the **Install Plugin** field and click **Install** — no terminal or Docker restart required:
+
+```
+https://github.com/zagatozee/slopsmith-plugin-lufs-meter
 ```
 
-> ⚠️ The directory name **must** be `lufs_meter`. Slopsmith uses the folder name as the plugin ID and it must match the `"id"` field in `plugin.json`.
+### Via git (manual)
+
+```bash
+cd /path/to/slopsmith/plugins
+git clone https://github.com/zagatozee/slopsmith-plugin-lufs-meter.git lufs-meter
+docker compose restart
+```
 
 ---
 

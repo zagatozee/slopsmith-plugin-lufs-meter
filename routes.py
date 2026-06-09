@@ -2,20 +2,20 @@
 LUFS Meter plugin — routes.py
 
 Provides:
-  GET  /api/plugins/lufs_meter/song_volume?filename=...
+  GET  /api/plugins/lufs-meter/song_volume?filename=...
        For PSARCs: reads SongVolume from the manifest JSON files in the
        extracted tmp dir (already on disk from the highway WS handler).
        Falls back to scanning the PSARC directly if the tmp dir is gone.
        Returns { volume_db, source, format }
 
-  POST /api/plugins/lufs_meter/set_offset
+  POST /api/plugins/lufs-meter/set_offset
        Persist a manual playback-volume offset for any song.
        Body: { filename, offset_db }
 
-  GET  /api/plugins/lufs_meter/get_offset?filename=...
+  GET  /api/plugins/lufs-meter/get_offset?filename=...
        Return the persisted offset for a song, or 0.0.
 
-  GET  /api/plugins/lufs_meter/status
+  GET  /api/plugins/lufs-meter/status
        Returns { version }
 """
 
@@ -127,7 +127,7 @@ def setup(app, context):
     # API endpoints
     # ------------------------------------------------------------------
 
-    @app.get("/api/plugins/lufs_meter/song_volume")
+    @app.get("/api/plugins/lufs-meter/song_volume")
     def song_volume(filename: str):
         """
         Return the SongVolume dB offset from the PSARC manifest.
@@ -205,7 +205,7 @@ def setup(app, context):
         filename: str
         offset_db: float
 
-    @app.post("/api/plugins/lufs_meter/set_offset")
+    @app.post("/api/plugins/lufs-meter/set_offset")
     def set_offset(body: OffsetBody):
         offset = max(-30.0, min(30.0, body.offset_db))
         with db_lock:
@@ -219,7 +219,7 @@ def setup(app, context):
         log.info("Stored volume offset %.1f dB for %s", offset, body.filename)
         return {"ok": True}
 
-    @app.get("/api/plugins/lufs_meter/get_offset")
+    @app.get("/api/plugins/lufs-meter/get_offset")
     def get_offset(filename: str):
         with db_lock:
             conn = sqlite3.connect(db_path)
@@ -229,8 +229,8 @@ def setup(app, context):
             conn.close()
         return {"offset_db": row[0] if row else 0.0}
 
-    @app.get("/api/plugins/lufs_meter/status")
+    @app.get("/api/plugins/lufs-meter/status")
     def status():
-        return {"version": "1.5.1"}
+        return {"version": "1.5.2"}
 
     log.info("LUFS Meter plugin ready")

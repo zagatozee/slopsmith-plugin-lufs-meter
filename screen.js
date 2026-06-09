@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.5.1
+ * LUFS Meter — screen.js  v1.5.2
  *
  * Gain chain:  <audio> → MediaElementSourceNode → GainNode → AnalyserNode → destination
  * Total gain = manifestOffsetDb + userTrimDb
@@ -173,7 +173,7 @@
     _updateInfoPanel();
     if (_currentFilename) {
       _setTrimEntry(_currentFilename, _userTrimDb, provisional);
-      fetch('/api/plugins/lufs_meter/set_offset', {
+      fetch('/api/plugins/lufs-meter/set_offset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: _currentFilename, offset_db: _userTrimDb })
@@ -435,7 +435,7 @@
 
     // Fetch PSARC SongVolume from backend
     try {
-      const r = await fetch(`/api/plugins/lufs_meter/song_volume?filename=${encodeURIComponent(filename)}`);
+      const r = await fetch(`/api/plugins/lufs-meter/song_volume?filename=${encodeURIComponent(filename)}`);
       const d = await r.json();
       _manifestOffsetDb = typeof d.volume_db === 'number' ? d.volume_db : 0.0;
       if (d.format) _currentFormat = d.format;
@@ -444,7 +444,7 @@
     // Check for saved trim (server DB first, localStorage fallback)
     let savedTrim = null;
     try {
-      const r = await fetch(`/api/plugins/lufs_meter/get_offset?filename=${encodeURIComponent(filename)}`);
+      const r = await fetch(`/api/plugins/lufs-meter/get_offset?filename=${encodeURIComponent(filename)}`);
       const d = await r.json();
       if (typeof d.offset_db === 'number' && d.offset_db !== 0.0) savedTrim = d.offset_db;
     } catch (_) {}
@@ -621,7 +621,7 @@
     w.addEventListener('click', () => {
       // Save which screen we're on so esc() can return to it
       _callerScreen = document.querySelector('.screen.active')?.id || null;
-      window.showScreen && window.showScreen('plugin-lufs_meter');
+      window.showScreen && window.showScreen('plugin-lufs-meter');
     });
     controls.appendChild(w);
   }
