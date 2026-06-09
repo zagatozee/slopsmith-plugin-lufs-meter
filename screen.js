@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.6.2
+ * LUFS Meter — screen.js  v1.6.3
  *
  * Architecture change from v1.5.x:
  *   The plugin no longer navigates away from the player to show live metering.
@@ -20,7 +20,7 @@
   // Settings
   // -------------------------------------------------------------------------
   const SETTINGS_KEY = 'lufs_meter_v2';
-  const VERSION = '1.6.2';
+  const VERSION = '1.6.3';
 
   function _loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (_) { return {}; }
@@ -108,31 +108,28 @@
 
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
 
-    // Already connected — just reapply gain
-    if (_audioGraphReady && _gainNode) {
+    // Already fully connected — just reapply gain
+    if (_audioGraphReady && _gainNode && _analyser) {
       _applyGain();
       return true;
     }
 
-    // Never rebuild while audio is playing — it causes a pause
-    const _playCheck = _getAudioElement();
-    if (_playCheck && !_playCheck.paused && _sourceNode) {
-      _applyGain();
-      return false;
-    }
-
-    try { _sourceNode && _sourceNode.disconnect(); } catch (_) {}
-    try { _gainNode   && _gainNode.disconnect();   } catch (_) {}
-    try { _analyser   && _analyser.disconnect();   } catch (_) {}
-
-    try {
-      _sourceNode = _audioCtx.createMediaElementSource(audioEl);
-    } catch (e) {
-      if (!_sourceNode) {
-        console.warn('[lufs_meter] Cannot create MediaElementSource:', e);
+    // createMediaElementSource can only be called once per element.
+    // If it throws, the element is already captured — reuse the existing _sourceNode
+    // and just rebuild the gain/analyser chain from it.
+    if (!_sourceNode) {
+      try {
+        _sourceNode = _audioCtx.createMediaElementSource(audioEl);
+      } catch (e) {
+        console.warn('[lufs_meter] createMediaElementSource failed — element may already be captured by another plugin:', e);
         return false;
       }
     }
+
+    // Disconnect any stale downstream nodes
+    try { _sourceNode.disconnect(); } catch (_) {}
+    try { _gainNode  && _gainNode.disconnect();  } catch (_) {}
+    try { _analyser  && _analyser.disconnect();  } catch (_) {}
 
     _gainNode  = _audioCtx.createGain();
     _analyser  = _audioCtx.createAnalyser();
@@ -146,6 +143,7 @@
 
     _audioGraphReady = true;
     _applyGain();
+    console.log('[lufs_meter] audio graph connected');
     return true;
   }
 
@@ -728,6 +726,9 @@
 
   function _showPanel() {
     _buildPanel();
+    // Attempt graph connection every time panel opens — covers mid-song opens
+    // where the graph wasn't connected at script load time
+    if (!_audioGraphReady) _setupAudioGraph();
     const panel = document.getElementById('lm-float-panel');
     if (panel) { panel.style.display = 'block'; _panelVisible = true; _updateAllDisplays(); }
   }
@@ -810,7 +811,11 @@
     // Settings screen — does NOT touch the audio graph
 
     document.getElementById('lm-btn-back')?.addEventListener('click', () => {
-      if (typeof esc === 'function') esc();
+      // esc() is the Slopsmith API; fall back to history if unavailable
+      try {
+        if (typeof esc === 'function') { esc(); return; }
+      } catch (_) {}
+      try { window.history.back(); } catch (_) {}
     });
     document.getElementById('lm-btn-minus')?.addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
     document.getElementById('lm-btn-plus')?.addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));
