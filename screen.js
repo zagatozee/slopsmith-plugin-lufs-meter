@@ -1,41 +1,26 @@
 /**
- * LUFS Meter — screen.js  v1.5.5
+ * LUFS Meter — screen.js  v1.6.2
+ *
+ * Architecture change from v1.5.x:
+ *   The plugin no longer navigates away from the player to show live metering.
+ *   Instead, clicking the player bar widget toggles a FLOATING SIDE PANEL
+ *   injected directly into document.body. The panel overlays the highway,
+ *   playback continues uninterrupted, and a ✕ button closes it.
+ *
+ *   The plugin screen (screen.html / nav link) still exists for settings —
+ *   global target, presets, manual trim — but the live meter lives in the panel.
  *
  * Gain chain:  <audio> → MediaElementSourceNode → GainNode → AnalyserNode → destination
  * Total gain = manifestOffsetDb + userTrimDb
- *
- * Key API facts confirmed from server.py + v0.2.8 release notes:
- *
- *   - The WS message type is "song_info" (server.py:4763), but `filename` is NOT
- *     in that payload — it lives in the WS URL /ws/highway/{filename}.
- *     The frontend re-emits as window.slopsmith.emit('song:play', {...}) and
- *     DOES include filename in that event payload.
- *     → We listen to 'song:play', not 'song:info'.
- *
- *   - highway.getAudioElement() is the correct v0.2.8 API for the audio element.
- *     document.getElementById('audio') is a fragile fallback.
- *
- *   - window.playSong wrapping: await inside a plugin wrapper yields to the event
- *     loop, so WS messages can arrive before outer wrappers finish. We must not
- *     depend on setup order — instead we set up the audio graph lazily on the
- *     first 'song:play' event and also on any showScreen call.
- *
- *   - esc() is the correct function to return to the player screen from a plugin.
- *     showScreen() navigates forward; esc() goes back. We add a back button.
- *
- *   - Tailwind: prebuilt stylesheet replaced the Play CDN. We use 100% inline
- *     styles throughout — no change needed.
- *
- *   - window.slopsmith.on() is the correct event subscription API.
- *     (Not window.addEventListener, not a custom EventEmitter pattern.)
  */
 (function () {
   'use strict';
 
   // -------------------------------------------------------------------------
-  // Settings — persisted to localStorage
+  // Settings
   // -------------------------------------------------------------------------
   const SETTINGS_KEY = 'lufs_meter_v2';
+  const VERSION = '1.6.2';
 
   function _loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (_) { return {}; }
@@ -70,6 +55,7 @@
   let _pcmBuffer  = null;
   let _rafId      = null;
   let _lastMeasure = 0;
+  let _audioGraphReady = false;
 
   let _currentFilename   = null;
   let _currentFormat     = 'unknown';
@@ -77,7 +63,6 @@
   let _manifestOffsetDb  = 0.0;
   let _userTrimDb        = 0.0;
   let _trimIsProvisional = false;
-  let _audioGraphReady   = false;
 
   let _momentaryLufs  = null;
   let _shortTermLufs  = null;
@@ -95,44 +80,43 @@
   const PREFLIGHT_BYTES    = 400_000;
   const PREFLIGHT_START_PCT = 0.30;
 
+  // Create AudioContext eagerly — constructing it later causes a brief audio
+  // interruption in Electron/Desktop when a song is already playing.
+  try {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (e) {
+    console.warn('[lufs_meter] AudioContext creation failed:', e);
+  }
+
   // -------------------------------------------------------------------------
-  // Get the audio element via the official API with fallback
+  // Audio element helper
   // -------------------------------------------------------------------------
   function _getAudioElement() {
-    // v0.2.8+: highway.getAudioElement() is the correct API
     try {
-      if (window.highway && typeof window.highway.getAudioElement === 'function') {
+      if (window.highway && typeof window.highway.getAudioElement === 'function')
         return window.highway.getAudioElement();
-      }
     } catch (_) {}
-    // Fallback for older versions
     return document.getElementById('audio');
   }
 
-  // Create AudioContext eagerly — constructing it later (e.g. when screen opens mid-song)
-  // can cause a brief audio interruption in Electron/Desktop builds.
-  // Creation here is safe: script runs after a user gesture (plugin install/nav).
-  _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
   // -------------------------------------------------------------------------
-  // Web Audio graph — set up once, idempotent thereafter
+  // Web Audio graph — built once, never torn down while playing
   // -------------------------------------------------------------------------
   function _setupAudioGraph() {
     const audioEl = _getAudioElement();
-    if (!audioEl) return false;
+    if (!audioEl || !_audioCtx) return false;
 
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
 
-    // If already connected, just ensure gain is applied — never tear down while playing
+    // Already connected — just reapply gain
     if (_audioGraphReady && _gainNode) {
       _applyGain();
       return true;
     }
 
-    // Also don't rebuild if audio is currently playing — it will cause a pause
-    const _checkEl = _getAudioElement();
-    if (_checkEl && !_checkEl.paused && _sourceNode) {
-      console.warn('[lufs_meter] Skipping graph rebuild — audio is playing');
+    // Never rebuild while audio is playing — it causes a pause
+    const _playCheck = _getAudioElement();
+    if (_playCheck && !_playCheck.paused && _sourceNode) {
       _applyGain();
       return false;
     }
@@ -144,8 +128,6 @@
     try {
       _sourceNode = _audioCtx.createMediaElementSource(audioEl);
     } catch (e) {
-      // Already captured — this element's source node persists across songs.
-      // Reconnect our gain and analyser to the existing source.
       if (!_sourceNode) {
         console.warn('[lufs_meter] Cannot create MediaElementSource:', e);
         return false;
@@ -180,7 +162,7 @@
     _userTrimDb        = Math.max(-20, Math.min(20, db));
     _trimIsProvisional = provisional;
     _applyGain();
-    _updateInfoPanel();
+    _updateAllDisplays();
     if (_currentFilename) {
       _setTrimEntry(_currentFilename, _userTrimDb, provisional);
       fetch('/api/plugins/lufs-meter/set_offset', {
@@ -235,7 +217,7 @@
         _refineFromIntegrated();
     }
 
-    _updateMeterDisplay();
+    _updateMeterDisplays();
   }
 
   // -------------------------------------------------------------------------
@@ -247,7 +229,7 @@
     const delta = _getGlobalTarget() - intLufs;
     _refinementDone = true;
     _setUserTrim(_userTrimDb + delta, false);
-    _showRefinementBadge(intLufs.toFixed(1));
+    _setPanelStatus(`✓ refined: ${intLufs.toFixed(1)} LUFS`, '#22c55e');
     console.log(`[lufs_meter] refined: ${intLufs.toFixed(1)} LUFS, delta ${delta.toFixed(2)} dB`);
   }
 
@@ -295,15 +277,15 @@
   // -------------------------------------------------------------------------
   // Background analysis queue
   // -------------------------------------------------------------------------
-  const _analysisCache   = new Map();
+  const _analysisCache    = new Map();
   const _analysisInFlight = new Set();
-  const _analysisQueue   = [];
-  let _activeAnalyses    = 0;
-  const MAX_CONCURRENT   = 2;
+  const _analysisQueue    = [];
+  let _activeAnalyses     = 0;
+  const MAX_CONCURRENT    = 2;
+  const _pendingFilenames = new Set();
 
   function _queueAnalysis(filename, audioUrl) {
-    if (!_getGlobalEnabled()) return;
-    if (!audioUrl || !filename) return;
+    if (!_getGlobalEnabled() || !audioUrl || !filename) return;
     if (_analysisCache.has(filename)) return;
     if (_getTrimEntry(filename) && !_getTrimEntry(filename).provisional) return;
     if (_analysisInFlight.has(filename)) return;
@@ -327,9 +309,8 @@
       if (lufs !== null && isFinite(lufs)) {
         _analysisCache.set(filename, { lufs, analysedAt: Date.now() });
         console.log(`[lufs_meter] bg: ${filename} → ${lufs.toFixed(1)} LUFS`);
-        if (filename === _currentFilename && _trimIsProvisional) {
+        if (filename === _currentFilename && _trimIsProvisional)
           _setUserTrim(_getGlobalTarget() - lufs - _manifestOffsetDb, true);
-        }
       }
     } finally {
       _analysisInFlight.delete(filename);
@@ -344,45 +325,38 @@
   }
 
   // -------------------------------------------------------------------------
-  // Library card hover → queue analysis
+  // Library card hover / song-preview hooks
   // -------------------------------------------------------------------------
   function _hookLibraryCards() {
     const container = document.getElementById('library') || document.body;
-    container.addEventListener('mouseenter', _onCardHover, { capture: true, passive: true });
-    container.addEventListener('focusin',    _onCardHover, { capture: true, passive: true });
+    const handler = (evt) => {
+      if (!_getGlobalEnabled()) return;
+      let el = evt.target, filename = null;
+      for (let i = 0; i < 6 && el && el !== document.body; i++) {
+        filename = el.dataset && (el.dataset.filename || el.dataset.file);
+        if (filename) break;
+        el = el.parentElement;
+      }
+      if (filename) { _pendingFilenames.add(filename); _scheduleIdleDrain(); }
+    };
+    container.addEventListener('mouseenter', handler, { capture: true, passive: true });
+    container.addEventListener('focusin',    handler, { capture: true, passive: true });
   }
 
-  function _onCardHover(evt) {
-    if (!_getGlobalEnabled()) return;
-    let el = evt.target, filename = null;
-    for (let i = 0; i < 6 && el && el !== document.body; i++) {
-      filename = el.dataset && (el.dataset.filename || el.dataset.file);
-      if (filename) break;
-      el = el.parentElement;
-    }
-    if (filename) _pendingFilenames.add(filename);
-    _scheduleIdleDrain();
-  }
-
-  const _pendingFilenames = new Set();
-
-  // -------------------------------------------------------------------------
-  // Song-preview plugin hook
-  // -------------------------------------------------------------------------
   function _hookSongPreview() {
     new MutationObserver((mutations) => {
       for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (node.nodeName === 'AUDIO' && node !== _getAudioElement()) {
             node.addEventListener('loadstart', () => {
-              if (node.src) _onPreviewUrl(node.src, node.dataset && node.dataset.filename);
+              if (node.src) _onPreviewUrl(node.src, node.dataset?.filename);
             });
           }
         }
         if (m.type === 'attributes' && m.attributeName === 'src') {
           const el = m.target;
           if (el.nodeName === 'AUDIO' && el !== _getAudioElement() && el.src)
-            _onPreviewUrl(el.src, el.dataset && el.dataset.filename);
+            _onPreviewUrl(el.src, el.dataset?.filename);
         }
       }
     }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
@@ -407,15 +381,12 @@
   }
 
   // -------------------------------------------------------------------------
-  // Song lifecycle — triggered by song:play event
+  // Song lifecycle
   // -------------------------------------------------------------------------
   async function _onSongPlay(info) {
-    // info from window.slopsmith 'song:play' event includes:
-    //   filename, format, audio_url, duration, title, artist, arrangement, ...
     const filename = info.filename;
     const format   = info.format   || 'unknown';
     const audioUrl = info.audio_url || null;
-
     if (!filename) return;
 
     if (_refinementTimer) { clearTimeout(_refinementTimer); _refinementTimer = null; }
@@ -432,8 +403,6 @@
     _refinementDone     = false;
     _trimIsProvisional  = false;
 
-    // Ensure audio graph is connected. Only builds once — the guard inside
-    // _setupAudioGraph() prevents teardown/rebuild while audio is playing.
     _setupAudioGraph();
 
     const audioEl = _getAudioElement();
@@ -442,7 +411,6 @@
       audioEl.addEventListener('ended', _onAudioEnded, { once: true });
     }
 
-    // Fetch PSARC SongVolume from backend
     try {
       const r = await fetch(`/api/plugins/lufs-meter/song_volume?filename=${encodeURIComponent(filename)}`);
       const d = await r.json();
@@ -450,7 +418,6 @@
       if (d.format) _currentFormat = d.format;
     } catch (_) {}
 
-    // Check for saved trim (server DB first, localStorage fallback)
     let savedTrim = null;
     try {
       const r = await fetch(`/api/plugins/lufs-meter/get_offset?filename=${encodeURIComponent(filename)}`);
@@ -464,43 +431,40 @@
       _userTrimDb        = savedTrim;
       _trimIsProvisional = localEntry ? !!localEntry.provisional : false;
       _applyGain();
-      _updateInfoPanel();
+      _updateAllDisplays();
       return;
     }
 
     if (!_getGlobalEnabled()) {
       _userTrimDb = 0.0;
       _applyGain();
-      _updateInfoPanel();
+      _updateAllDisplays();
       return;
     }
 
-    // Check background analysis cache
     const cached = _analysisCache.get(filename);
     if (cached && isFinite(cached.lufs)) {
       const trim = _getGlobalTarget() - cached.lufs - _manifestOffsetDb;
       _setUserTrim(trim, true);
-      _updatePreflightStatus(`pre-analysed: ${cached.lufs.toFixed(1)} LUFS → ${_fmtDb(trim)}`);
+      _setPanelStatus(`pre-analysed: ${cached.lufs.toFixed(1)} LUFS → ${_fmtDb(trim)}`, '#9ca3af');
       _analysisCache.delete(filename);
       return;
     }
 
-    // Preflight: sample the audio file now
     if (audioUrl) {
-      _updatePreflightStatus('sampling…');
+      _setPanelStatus('sampling…', '#9ca3af');
       const lufs = await _sampleAudioUrl(audioUrl);
       if (lufs !== null && isFinite(lufs)) {
         const trim = _getGlobalTarget() - lufs - _manifestOffsetDb;
         _setUserTrim(trim, true);
-        _updatePreflightStatus(`sampled: ${lufs.toFixed(1)} LUFS → ${_fmtDb(trim)}`);
+        _setPanelStatus(`sampled: ${lufs.toFixed(1)} LUFS → ${_fmtDb(trim)}`, '#9ca3af');
         return;
       }
     }
 
-    // Fallback: no trim yet, refine from live meter after 8 s
     _userTrimDb = 0.0;
     _applyGain();
-    _updatePreflightStatus('sampling failed — refining from live meter');
+    _setPanelStatus('sampling failed — refining from live meter', '#f59e0b');
     _refinementTimer = setTimeout(() => {
       if (!_refinementDone && isFinite(_shortTermLufs)) {
         _setUserTrim(_getGlobalTarget() - _shortTermLufs, true);
@@ -526,43 +490,59 @@
     return '#60a5fa';
   }
 
-  function _updateMeterDisplay() {
-    const mEl = document.getElementById('lm-momentary');
-    const sEl = document.getElementById('lm-short-term');
-    const bar  = document.getElementById('lm-bar');
-    const tgt  = document.getElementById('lm-target-line');
-    if (mEl) { mEl.textContent = _fmt(_momentaryLufs);  mEl.style.color = _colorForLufs(_momentaryLufs); }
-    if (sEl) { sEl.textContent = _fmt(_shortTermLufs);  sEl.style.color = _colorForLufs(_shortTermLufs); }
-    if (bar && isFinite(_momentaryLufs)) {
-      const pct = Math.max(0, Math.min(100, ((_momentaryLufs + 40) / 34) * 100));
-      bar.style.width = pct + '%';
-      bar.style.background = _colorForLufs(_momentaryLufs);
+  // Update both the floating panel and the plugin screen (whichever is visible)
+  function _updateMeterDisplays() {
+    const color = _colorForLufs(_momentaryLufs);
+    for (const id of ['lm-momentary', 'lm-panel-momentary']) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = _fmt(_momentaryLufs); el.style.color = color; }
     }
-    if (tgt) {
-      const t = _getGlobalEnabled() ? _getGlobalTarget() : -16.0;
-      tgt.style.left    = Math.max(0, Math.min(100, ((t + 40) / 34) * 100)) + '%';
-      tgt.style.display = 'block';
+    for (const id of ['lm-short-term', 'lm-panel-short-term']) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = _fmt(_shortTermLufs); el.style.color = _colorForLufs(_shortTermLufs); }
+    }
+    for (const id of ['lm-bar', 'lm-panel-bar']) {
+      const el = document.getElementById(id);
+      if (el && isFinite(_momentaryLufs)) {
+        const pct = Math.max(0, Math.min(100, ((_momentaryLufs + 40) / 34) * 100));
+        el.style.width = pct + '%';
+        el.style.background = color;
+      }
+    }
+    for (const id of ['lm-target-line', 'lm-panel-target-line']) {
+      const el = document.getElementById(id);
+      if (el) {
+        const t = _getGlobalEnabled() ? _getGlobalTarget() : -16.0;
+        el.style.left    = Math.max(0, Math.min(100, ((t + 40) / 34) * 100)) + '%';
+        el.style.display = 'block';
+      }
     }
   }
 
-  function _updateInfoPanel() {
-    const set = (id, text, color) => {
-      const el = document.getElementById(id);
-      if (el) { el.textContent = text; if (color) el.style.color = color; }
-    };
-    set('lm-format',          _currentFormat || '–');
-    set('lm-manifest-offset', _fmtDb(_manifestOffsetDb),
-        _manifestOffsetDb !== 0 ? '#22c55e' : '#6b7280');
-    set('lm-user-trim',       _fmtDb(_userTrimDb));
-    set('lm-total-offset',    _fmtDb(_manifestOffsetDb + _userTrimDb));
-
-    const tIn  = document.getElementById('lm-trim-input');
-    if (tIn)   tIn.value = _userTrimDb.toFixed(1);
-
-    const prov = document.getElementById('lm-provisional-badge');
-    if (prov) {
-      prov.style.display = _trimIsProvisional ? 'inline' : 'none';
-      prov.textContent   = _trimIsProvisional ? '⏳ provisional — refining…' : '';
+  function _updateAllDisplays() {
+    _updateMeterDisplays();
+    // Update panel gain info
+    const set = (id, text, col) => { const el = document.getElementById(id); if (el) { el.textContent = text; if (col) el.style.color = col; } };
+    set('lm-panel-manifest',   _fmtDb(_manifestOffsetDb), _manifestOffsetDb !== 0 ? '#22c55e' : '#6b7280');
+    set('lm-panel-trim',       _fmtDb(_userTrimDb));
+    set('lm-panel-total',      _fmtDb(_manifestOffsetDb + _userTrimDb));
+    set('lm-panel-format',     _currentFormat || '–');
+    const trimIn = document.getElementById('lm-panel-trim-input');
+    if (trimIn) trimIn.value = _userTrimDb.toFixed(1);
+    const prov = document.getElementById('lm-panel-provisional');
+    if (prov) { prov.style.display = _trimIsProvisional ? 'inline' : 'none'; }
+    // Also update settings screen elements if visible
+    set('lm-manifest-offset',  _fmtDb(_manifestOffsetDb), _manifestOffsetDb !== 0 ? '#22c55e' : '#6b7280');
+    set('lm-user-trim',        _fmtDb(_userTrimDb));
+    set('lm-total-offset',     _fmtDb(_manifestOffsetDb + _userTrimDb));
+    set('lm-format',           _currentFormat || '–');
+    const trimIn2 = document.getElementById('lm-trim-input');
+    if (trimIn2) trimIn2.value = _userTrimDb.toFixed(1);
+    const qEl = document.getElementById('lm-queue-size');
+    if (qEl) {
+      const n = _analysisQueue.length + _activeAnalyses;
+      qEl.textContent = n > 0 ? `${n} queued` : `${_analysisCache.size} pre-analysed`;
+      qEl.style.color = n > 0 ? '#e8c040' : '#4b5563';
     }
     const ovEl = document.getElementById('lm-override-status');
     if (ovEl) {
@@ -570,48 +550,209 @@
         ? `Global override ON → ${_getGlobalTarget().toFixed(1)} LUFS` : 'Global override off';
       ovEl.style.color = _getGlobalEnabled() ? '#e8c040' : '#4b5563';
     }
-    const qEl = document.getElementById('lm-queue-size');
-    if (qEl) {
-      const n = _analysisQueue.length + _activeAnalyses;
-      qEl.textContent = n > 0 ? `${n} queued` : `${_analysisCache.size} pre-analysed`;
-      qEl.style.color = n > 0 ? '#e8c040' : '#4b5563';
-    }
   }
 
-  function _updateOverrideUI() {
-    const toggle   = document.getElementById('lm-override-toggle');
-    const targetEl = document.getElementById('lm-override-target');
-    const row      = document.getElementById('lm-override-controls');
-    if (toggle)   toggle.checked = _getGlobalEnabled();
-    if (targetEl) targetEl.value = _getGlobalTarget().toFixed(1);
-    if (row)      row.style.opacity = _getGlobalEnabled() ? '1' : '0.4';
-    _updateInfoPanel();
-    _updateMeterDisplay();
-  }
-
-  function _updatePreflightStatus(msg) {
-    const el = document.getElementById('lm-preflight-status');
-    if (el) { el.textContent = msg; el.style.display = msg ? 'block' : 'none'; el.style.color = '#9ca3af'; }
-  }
-
-  function _showRefinementBadge(lufs) {
-    const el = document.getElementById('lm-preflight-status');
-    if (el) { el.textContent = `✓ refined: ${lufs} LUFS integrated`; el.style.color = '#22c55e'; el.style.display = 'block'; }
-    const p = document.getElementById('lm-provisional-badge');
-    if (p)   p.style.display = 'none';
+  function _setPanelStatus(msg, color) {
+    const el = document.getElementById('lm-panel-status');
+    if (el) { el.textContent = msg; el.style.color = color || '#9ca3af'; el.style.display = msg ? 'block' : 'none'; }
+    // Also update settings screen status
+    const el2 = document.getElementById('lm-preflight-status');
+    if (el2) { el2.textContent = msg; el2.style.color = color || '#9ca3af'; el2.style.display = msg ? 'block' : 'none'; }
   }
 
   // -------------------------------------------------------------------------
-  // Player navbar widget injection
+  // Floating side panel — the primary live metering UI
+  // -------------------------------------------------------------------------
+  let _panelVisible = false;
+
+  function _buildPanel() {
+    if (document.getElementById('lm-float-panel')) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'lm-float-panel';
+    // Matches tuner card style: centred float, rounded, subtle border, dark bg
+    panel.style.cssText = `
+      position: fixed;
+      top: 80px;
+      right: 8px;
+      width: 300px;
+      background: #131920;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      z-index: 9999;
+      box-shadow: 0 8px 40px rgba(0,0,0,.7);
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: #d1d5db;
+      display: none;
+      overflow: hidden;
+    `;
+
+    panel.innerHTML = `
+      <!-- Title row — centred label + gear icon top-right (matches tuner) -->
+      <div style="position:relative;padding:16px 16px 10px;text-align:center;">
+        <span style="font-size:11px;font-weight:600;letter-spacing:.12em;
+          text-transform:uppercase;color:#6b7280;">LUFS Meter</span>
+        <a id="lm-panel-settings-link" href="#" title="Settings"
+          style="position:absolute;right:14px;top:14px;color:#4b5563;
+            text-decoration:none;font-size:16px;line-height:1;">⚙</a>
+        <span id="lm-panel-format" style="position:absolute;left:14px;top:16px;
+          font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+          color:#4080e0;background:#1e3a5f;padding:1px 6px;border-radius:999px;">–</span>
+      </div>
+
+      <!-- Live readings -->
+      <div style="padding:4px 20px 14px;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
+          <div style="text-align:center;">
+            <div style="font-size:10px;color:#4b5563;margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em;">Momentary</div>
+            <div id="lm-panel-momentary" style="font-size:26px;font-weight:700;
+              font-family:ui-monospace,monospace;color:#6b7280;">–</div>
+            <div style="font-size:10px;color:#4b5563;">LUFS</div>
+          </div>
+          <div style="width:1px;background:rgba(255,255,255,.06);margin:0 4px;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:10px;color:#4b5563;margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em;">Short-term (3s)</div>
+            <div id="lm-panel-short-term" style="font-size:26px;font-weight:700;
+              font-family:ui-monospace,monospace;color:#6b7280;">–</div>
+            <div style="font-size:10px;color:#4b5563;">LUFS</div>
+          </div>
+        </div>
+
+        <!-- Bar -->
+        <div style="position:relative;height:6px;background:rgba(255,255,255,.06);
+          border-radius:3px;margin-bottom:6px;overflow:visible;">
+          <div style="position:absolute;inset:0;overflow:hidden;border-radius:3px;">
+            <div id="lm-panel-bar" style="height:100%;width:0%;border-radius:3px;
+              background:#22c55e;transition:width .4s,background .4s;"></div>
+          </div>
+          <div id="lm-panel-target-line" style="display:none;position:absolute;
+            top:-3px;bottom:-3px;width:2px;background:#e8c040;border-radius:1px;
+            transform:translateX(-50%);pointer-events:none;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:#374151;">
+          <span>–40</span><span>–30</span><span>–20</span><span>–16</span><span>–14</span><span>–6</span>
+        </div>
+      </div>
+
+      <!-- Gain breakdown -->
+      <div style="margin:0 14px 14px;background:rgba(255,255,255,.03);border-radius:10px;
+        padding:10px 12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;text-align:center;">
+          <div>
+            <div style="font-size:9px;color:#4b5563;margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em;">PSARC</div>
+            <div id="lm-panel-manifest" style="font-size:12px;font-weight:700;
+              font-family:ui-monospace,monospace;color:#6b7280;">0.0 dB</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#4b5563;margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em;">Trim</div>
+            <div id="lm-panel-trim" style="font-size:12px;font-weight:700;
+              font-family:ui-monospace,monospace;color:#4080e0;">0.0 dB</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#4b5563;margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em;">Total</div>
+            <div id="lm-panel-total" style="font-size:12px;font-weight:700;
+              font-family:ui-monospace,monospace;color:#f3f4f6;">0.0 dB</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status + provisional badge -->
+      <div style="padding:0 20px 10px;min-height:20px;">
+        <div id="lm-panel-status" style="font-size:11px;font-family:ui-monospace,monospace;
+          color:#9ca3af;display:none;margin-bottom:4px;text-align:center;"></div>
+        <div style="text-align:center;">
+          <span id="lm-panel-provisional" style="display:none;font-size:10px;color:#e8c040;
+            background:#2d2500;padding:1px 8px;border-radius:999px;">⏳ provisional</span>
+        </div>
+      </div>
+
+      <!-- Trim controls -->
+      <div style="padding:0 20px 16px;">
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;">
+          <button id="lm-panel-minus" style="width:32px;height:32px;border-radius:8px;
+            border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);
+            color:#d1d5db;font-size:18px;cursor:pointer;
+            display:flex;align-items:center;justify-content:center;">−</button>
+          <input id="lm-panel-trim-input" type="number" step="0.1" min="-20" max="20"
+            style="width:64px;text-align:center;background:rgba(255,255,255,.05);
+              border:1px solid rgba(255,255,255,.1);color:#f3f4f6;
+              font-family:ui-monospace,monospace;font-size:14px;
+              border-radius:8px;padding:5px 0;outline:none;" />
+          <span style="font-size:11px;color:#6b7280;">dB</span>
+          <button id="lm-panel-plus" style="width:32px;height:32px;border-radius:8px;
+            border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);
+            color:#d1d5db;font-size:18px;cursor:pointer;
+            display:flex;align-items:center;justify-content:center;">+</button>
+          <button id="lm-panel-reset" style="padding:5px 12px;border-radius:8px;
+            border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);
+            color:#9ca3af;font-size:11px;cursor:pointer;">Reset</button>
+        </div>
+      </div>
+
+      <!-- CLOSE — full width, matches tuner exactly -->
+      <div style="padding:0 14px 14px;">
+        <button id="lm-panel-close"
+          style="width:100%;padding:14px;border-radius:12px;
+            border:1px solid rgba(255,255,255,.08);
+            background:rgba(255,255,255,.05);
+            color:#9ca3af;font-size:13px;font-weight:600;
+            letter-spacing:.08em;text-transform:uppercase;
+            cursor:pointer;">
+          CLOSE
+        </button>
+      </div>
+
+      <!-- Version -->
+      <div style="padding:0 14px 10px;text-align:center;">
+        <span style="font-size:9px;color:#2d3748;font-family:ui-monospace,monospace;">v${VERSION}</span>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    // Wire panel controls
+    document.getElementById('lm-panel-close').addEventListener('click', _hidePanel);
+    document.getElementById('lm-panel-minus').addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
+    document.getElementById('lm-panel-plus').addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));
+    document.getElementById('lm-panel-reset').addEventListener('click', () => _setUserTrim(0, false));
+    document.getElementById('lm-panel-trim-input').addEventListener('change', function () {
+      const v = parseFloat(this.value);
+      if (!isNaN(v)) _setUserTrim(v, false);
+    });
+    document.getElementById('lm-panel-settings-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      _hidePanel();
+      window.showScreen && window.showScreen('plugin-lufs-meter');
+    });
+  }
+
+  function _showPanel() {
+    _buildPanel();
+    const panel = document.getElementById('lm-float-panel');
+    if (panel) { panel.style.display = 'block'; _panelVisible = true; _updateAllDisplays(); }
+  }
+
+  function _hidePanel() {
+    const panel = document.getElementById('lm-float-panel');
+    if (panel) { panel.style.display = 'none'; _panelVisible = false; }
+  }
+
+  function _togglePanel() {
+    if (_panelVisible) _hidePanel(); else _showPanel();
+  }
+
+  // -------------------------------------------------------------------------
+  // Player navbar widget
   // -------------------------------------------------------------------------
   function _injectPlayerWidget() {
     if (document.getElementById('lm-player-widget')) return;
     const controls = document.getElementById('player-controls');
     if (!controls) return;
 
+    // Compact LUFS readout in the player bar (same region as existing controls)
     const w = document.createElement('div');
     w.id = 'lm-player-widget';
-    w.title = 'LUFS Meter — click for details';
+    w.title = 'LUFS Meter — click to show/hide';
     w.style.cssText = `display:flex;align-items:center;gap:6px;padding:0 8px;
       font-size:12px;font-family:ui-monospace,monospace;color:#9ca3af;
       border-left:1px solid #374151;min-width:120px;cursor:pointer;user-select:none;`;
@@ -627,15 +768,35 @@
           background:#e8c040;border-radius:1px;transform:translateX(-50%);pointer-events:none;"></span>
       </span>
     `;
-    w.addEventListener('click', () => {
-      // Save which screen we're on so esc() can return to it
-      _callerScreen = document.querySelector('.screen.active')?.id || null;
-      window.showScreen && window.showScreen('plugin-lufs-meter');
-    });
+    w.addEventListener('click', _togglePanel);
     controls.appendChild(w);
-  }
 
-  let _callerScreen = null;
+    // Persistent "LUFS" pill button — bottom-right corner, same style as the Tuner button
+    if (!document.getElementById('lm-pill-btn')) {
+      const pill = document.createElement('button');
+      pill.id = 'lm-pill-btn';
+      pill.textContent = 'LUFS';
+      pill.style.cssText = `
+        position: fixed;
+        bottom: 16px;
+        right: 96px;
+        padding: 10px 18px;
+        background: #1e3a5f;
+        border: 1px solid rgba(64,128,224,.4);
+        border-radius: 12px;
+        color: #4080e0;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        cursor: pointer;
+        z-index: 9998;
+        user-select: none;
+        letter-spacing: .02em;
+      `;
+      pill.addEventListener('click', _togglePanel);
+      document.body.appendChild(pill);
+    }
+  }
 
   new MutationObserver(() => {
     if (document.getElementById('player-controls')) _injectPlayerWidget();
@@ -643,24 +804,17 @@
   _injectPlayerWidget();
 
   // -------------------------------------------------------------------------
-  // Screen init — called each time the plugin screen becomes visible
+  // Plugin screen (settings) init — called when screen.html is shown via nav
   // -------------------------------------------------------------------------
   window._lufs_meter_init_screen = function () {
-    // Audio graph was set up at script load — do not call _setupAudioGraph() here.
-    // Calling it mid-song (when the screen opens) causes a pause.
+    // Settings screen — does NOT touch the audio graph
 
-    // Back button — esc() is the Slopsmith API to return to the previous screen
     document.getElementById('lm-btn-back')?.addEventListener('click', () => {
       if (typeof esc === 'function') esc();
     });
-
     document.getElementById('lm-btn-minus')?.addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
     document.getElementById('lm-btn-plus')?.addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));
-    document.getElementById('lm-btn-reset')?.addEventListener('click', () => {
-      _setUserTrim(0, false);
-      _trimIsProvisional = false;
-      _updatePreflightStatus('');
-    });
+    document.getElementById('lm-btn-reset')?.addEventListener('click', () => _setUserTrim(0, false));
     document.getElementById('lm-trim-input')?.addEventListener('change', function () {
       const v = parseFloat(this.value);
       if (!isNaN(v)) _setUserTrim(v, false);
@@ -673,16 +827,15 @@
     });
     document.getElementById('lm-btn-remeasure')?.addEventListener('click', async () => {
       if (!_currentAudioUrl) return;
-      _updatePreflightStatus('sampling…');
+      _setPanelStatus('sampling…', '#9ca3af');
       const lufs = await _sampleAudioUrl(_currentAudioUrl);
       if (lufs !== null && isFinite(lufs)) {
         _setUserTrim(_getGlobalTarget() - lufs - _manifestOffsetDb, false);
-        _updatePreflightStatus(`sampled: ${lufs.toFixed(1)} LUFS → ${_fmtDb(_userTrimDb)}`);
+        _setPanelStatus(`sampled: ${lufs.toFixed(1)} LUFS → ${_fmtDb(_userTrimDb)}`, '#9ca3af');
       } else {
-        _updatePreflightStatus('sample decode failed');
+        _setPanelStatus('sample decode failed', '#ef4444');
       }
     });
-
     document.getElementById('lm-override-toggle')?.addEventListener('change', function () {
       _saveSettings({ globalEnabled: this.checked });
       _updateOverrideUI();
@@ -700,48 +853,46 @@
 
     if (!_rafId) { _lastMeasure = 0; _rafId = requestAnimationFrame(_measureTick); }
     _updateOverrideUI();
-    _updateInfoPanel();
-    _updateMeterDisplay();
-    _updatePreflightStatus('');
+    _updateAllDisplays();
   };
+
+  function _updateOverrideUI() {
+    const toggle   = document.getElementById('lm-override-toggle');
+    const targetEl = document.getElementById('lm-override-target');
+    const row      = document.getElementById('lm-override-controls');
+    if (toggle)   toggle.checked = _getGlobalEnabled();
+    if (targetEl) targetEl.value = _getGlobalTarget().toFixed(1);
+    if (row)      row.style.opacity = _getGlobalEnabled() ? '1' : '0.4';
+    _updateAllDisplays();
+  }
 
   // -------------------------------------------------------------------------
   // Slopsmith event hooks
   // -------------------------------------------------------------------------
-
-  // song:play is the correct event — fired by the frontend after the WS
-  // song_info message is processed. Payload includes filename, audio_url, format.
   window.slopsmith?.on('song:play', (info) => {
     _onSongPlay(info || {});
   });
 
-  // Also hook playSong to ensure audio graph is set up promptly
-  // (song:play may fire slightly after audio starts in some versions)
   const _origPlaySong = window.playSong;
   if (typeof _origPlaySong === 'function') {
     window.playSong = async function (song, options) {
       const result = await _origPlaySong.call(this, song, options);
-      // Attempt graph setup; if it fails here song:play will retry
       _setupAudioGraph();
       return result;
     };
   }
 
-  // Start background hooks
   _hookLibraryCards();
   _hookSongPreview();
 
-  // Start meter loop immediately so navbar widget is live
+  // Start meter loop
   _lastMeasure = 0;
   _rafId = requestAnimationFrame(_measureTick);
 
-  // If a song is already playing when we load (e.g. plugin installed mid-session),
-  // try to connect to the existing audio element now
+  // Connect audio graph on script load
   _setupAudioGraph();
 
-  // screen.js is loaded after screen.html is injected into the DOM.
-  // Call init directly here — the HTML elements are guaranteed to exist at this point.
-  // (The inline <script> in screen.html was removed because it ran before screen.js loaded.)
+  // Init the settings screen (screen.html is already in DOM at this point)
   _lufs_meter_init_screen();
 
 })();
