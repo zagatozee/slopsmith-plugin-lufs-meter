@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.5.4
+ * LUFS Meter — screen.js  v1.5.5
  *
  * Gain chain:  <audio> → MediaElementSourceNode → GainNode → AnalyserNode → destination
  * Total gain = manifestOffsetDb + userTrimDb
@@ -109,16 +109,18 @@
     return document.getElementById('audio');
   }
 
+  // Create AudioContext eagerly — constructing it later (e.g. when screen opens mid-song)
+  // can cause a brief audio interruption in Electron/Desktop builds.
+  // Creation here is safe: script runs after a user gesture (plugin install/nav).
+  _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
   // -------------------------------------------------------------------------
-  // Web Audio graph — set up lazily, idempotent
+  // Web Audio graph — set up once, idempotent thereafter
   // -------------------------------------------------------------------------
   function _setupAudioGraph() {
     const audioEl = _getAudioElement();
     if (!audioEl) return false;
 
-    if (!_audioCtx) {
-      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
 
     // If already connected, just ensure gain is applied — never tear down while playing
@@ -644,11 +646,13 @@
   // Screen init — called each time the plugin screen becomes visible
   // -------------------------------------------------------------------------
   window._lufs_meter_init_screen = function () {
-    // Ensure audio graph is connected whenever the screen opens
-    // (covers the case where user opens LUFS Meter mid-song)
-    if (!_audioGraphReady) _setupAudioGraph();
+    // Audio graph was set up at script load — do not call _setupAudioGraph() here.
+    // Calling it mid-song (when the screen opens) causes a pause.
 
-    // Back navigation is handled by Slopsmith's native back button — no duplicate needed.
+    // Back button — esc() is the Slopsmith API to return to the previous screen
+    document.getElementById('lm-btn-back')?.addEventListener('click', () => {
+      if (typeof esc === 'function') esc();
+    });
 
     document.getElementById('lm-btn-minus')?.addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
     document.getElementById('lm-btn-plus')?.addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));

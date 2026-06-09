@@ -1,9 +1,11 @@
-<!-- LUFS Meter — screen.html  v1.5.4 -->
+<!-- LUFS Meter — screen.html  v1.5.5 -->
 
 <div style="max-width:560px;margin:0 auto;padding:24px 16px;color:#d1d5db;">
 
-  <!-- Header — Slopsmith Desktop provides its own native Back button; we don't duplicate it -->
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+    <button id="lm-btn-back"
+      style="padding:6px 12px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+        color:#9ca3af;font-size:12px;cursor:pointer;flex-shrink:0;">← Back</button>
     <div style="font-size:22px;">📊</div>
     <div>
       <div style="font-size:18px;font-weight:700;color:#f3f4f6;">LUFS Meter</div>
@@ -15,7 +17,10 @@
 
   <!-- Live meter -->
   <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:16px;">
-    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:12px;">Live metering</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;">Live metering</div>
+      <div style="font-size:10px;color:#374151;font-family:ui-monospace,monospace;">v1.5.5</div>
+    </div>
     <div style="display:flex;gap:24px;margin-bottom:14px;">
       <div>
         <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Momentary</div>
