@@ -2,7 +2,7 @@
 
 > Real-time LUFS metering and automatic loudness normalisation for [Slopsmith](https://github.com/slopsmith/slopsmith).
 
-**Version:** 1.5.2 · **Plugin ID:** `lufs-meter` · **Author:** zagatozee
+**Version:** 1.5.4 · **Plugin ID:** `lufs-meter` · **Author:** zagatozee
 
 ---
 

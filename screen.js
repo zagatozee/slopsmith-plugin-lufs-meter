@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.5.2
+ * LUFS Meter — screen.js  v1.5.4
  *
  * Gain chain:  <audio> → MediaElementSourceNode → GainNode → AnalyserNode → destination
  * Total gain = manifestOffsetDb + userTrimDb
@@ -121,10 +121,18 @@
     }
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
 
-    // If we already have a source node connected to this same element, reuse it
+    // If already connected, just ensure gain is applied — never tear down while playing
     if (_audioGraphReady && _gainNode) {
       _applyGain();
       return true;
+    }
+
+    // Also don't rebuild if audio is currently playing — it will cause a pause
+    const _checkEl = _getAudioElement();
+    if (_checkEl && !_checkEl.paused && _sourceNode) {
+      console.warn('[lufs_meter] Skipping graph rebuild — audio is playing');
+      _applyGain();
+      return false;
     }
 
     try { _sourceNode && _sourceNode.disconnect(); } catch (_) {}
@@ -422,9 +430,8 @@
     _refinementDone     = false;
     _trimIsProvisional  = false;
 
-    // Ensure audio graph is connected — do this every song load
-    // because the highway may have rebuilt the audio element
-    _audioGraphReady = false;
+    // Ensure audio graph is connected. Only builds once — the guard inside
+    // _setupAudioGraph() prevents teardown/rebuild while audio is playing.
     _setupAudioGraph();
 
     const audioEl = _getAudioElement();
@@ -641,10 +648,7 @@
     // (covers the case where user opens LUFS Meter mid-song)
     if (!_audioGraphReady) _setupAudioGraph();
 
-    // Back button — esc() returns to the previous screen (the player)
-    document.getElementById('lm-btn-back')?.addEventListener('click', () => {
-      if (typeof esc === 'function') esc();
-    });
+    // Back navigation is handled by Slopsmith's native back button — no duplicate needed.
 
     document.getElementById('lm-btn-minus')?.addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
     document.getElementById('lm-btn-plus')?.addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));
