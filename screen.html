@@ -1,4 +1,4 @@
-<!-- LUFS Meter — screen.html  v1.6.3  (Settings screen — live meter is in the floating panel) -->
+<!-- LUFS Meter — screen.html  v1.7.0  (Settings screen — live meter is in the floating panel) -->
 
 <div style="max-width:540px;margin:0 auto;padding:24px 16px;color:#d1d5db;">
 
@@ -12,7 +12,7 @@
       <div style="font-size:18px;font-weight:700;color:#f3f4f6;">LUFS Meter — Settings</div>
       <div style="font-size:12px;color:#6b7280;">Live meter is in the floating panel · click the LUFS readout in the player bar</div>
     </div>
-    <div style="margin-left:auto;font-size:11px;color:#4b5563;font-family:ui-monospace,monospace;">v1.6.3</div>
+    <div style="margin-left:auto;font-size:11px;color:#4b5563;font-family:ui-monospace,monospace;">v1.7.0</div>
   </div>
 
   <!-- Global target -->
@@ -98,6 +98,15 @@
         style="padding:5px 12px;border-radius:7px;border:1px solid #374151;background:#1f2937;
           color:#9ca3af;font-size:11px;cursor:pointer;">Normalise from live meter</button>
     </div>
+  </div>
+
+  <!-- JUCE notice — shown only when slopsmithDesktop.audio is present -->
+  <div id="lm-juce-notice" style="display:none;background:#0f1f10;border:1px solid #166534;
+    border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#86efac;line-height:1.6;">
+    ℹ️ <strong>Slopsmith Desktop detected.</strong>
+    Using native bridge — <code>setGain('backing')</code> for volume control,
+    <code>getBackingLevel()</code> for isolated backing track metering.
+    Falls back to <code>getLevels().outputLevel</code> on older Desktop builds.
   </div>
 
   <!-- Manual trim -->

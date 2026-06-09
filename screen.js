@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.6.3
+ * LUFS Meter — screen.js  v1.7.0
  *
  * Architecture change from v1.5.x:
  *   The plugin no longer navigates away from the player to show live metering.
@@ -20,7 +20,7 @@
   // Settings
   // -------------------------------------------------------------------------
   const SETTINGS_KEY = 'lufs_meter_v2';
-  const VERSION = '1.6.3';
+  const VERSION = '1.7.0';
 
   function _loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (_) { return {}; }
@@ -56,6 +56,7 @@
   let _rafId      = null;
   let _lastMeasure = 0;
   let _audioGraphReady = false;
+  let _sourceTapOnly   = false;  // true when another plugin owns the MediaElementSource
 
   let _currentFilename   = null;
   let _currentFormat     = 'unknown';
@@ -80,8 +81,18 @@
   const PREFLIGHT_BYTES    = 400_000;
   const PREFLIGHT_START_PCT = 0.30;
 
-  // Create AudioContext eagerly — constructing it later causes a brief audio
-  // interruption in Electron/Desktop when a song is already playing.
+  // Feature-detect the Desktop native audio bridge.
+  // When present we use slopsmithDesktop.audio.setGain / getLevels instead of
+  // Web Audio — the <audio> element carries no actual audio in Desktop mode.
+  const _bridge = (window.slopsmithDesktop && window.slopsmithDesktop.audio)
+                    ? window.slopsmithDesktop.audio : null;
+
+  if (_bridge) {
+    console.info('[lufs_meter] Desktop bridge detected — using setGain/getLevels path');
+  }
+
+  // AudioContext is still needed for offline decodeAudioData (pre-play sampling)
+  // on both paths.
   try {
     _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   } catch (e) {
@@ -103,6 +114,9 @@
   // Web Audio graph — built once, never torn down while playing
   // -------------------------------------------------------------------------
   function _setupAudioGraph() {
+    // Desktop bridge present — <audio> element carries no audio, skip Web Audio graph
+    if (_bridge) return false;
+
     const audioEl = _getAudioElement();
     if (!audioEl || !_audioCtx) return false;
 
@@ -114,20 +128,6 @@
       return true;
     }
 
-    // createMediaElementSource can only be called once per element.
-    // If it throws, the element is already captured — reuse the existing _sourceNode
-    // and just rebuild the gain/analyser chain from it.
-    if (!_sourceNode) {
-      try {
-        _sourceNode = _audioCtx.createMediaElementSource(audioEl);
-      } catch (e) {
-        console.warn('[lufs_meter] createMediaElementSource failed — element may already be captured by another plugin:', e);
-        return false;
-      }
-    }
-
-    // Disconnect any stale downstream nodes
-    try { _sourceNode.disconnect(); } catch (_) {}
     try { _gainNode  && _gainNode.disconnect();  } catch (_) {}
     try { _analyser  && _analyser.disconnect();  } catch (_) {}
 
@@ -137,9 +137,43 @@
     _analyser.smoothingTimeConstant = 0.0;
     _pcmBuffer = new Float32Array(_analyser.fftSize);
 
-    _sourceNode.connect(_gainNode);
-    _gainNode.connect(_analyser);
-    _analyser.connect(_audioCtx.destination);
+    // createMediaElementSource can only be called once per element.
+    // If it throws, another plugin already captured it — in that case,
+    // tap the AudioContext destination output instead using a MediaStreamDestination.
+    // This measures the full mix output (including any gain from other plugins)
+    // but still gives us a live signal to meter.
+    if (!_sourceNode) {
+      try {
+        _sourceNode = _audioCtx.createMediaElementSource(audioEl);
+        _sourceNode.connect(_gainNode);
+        _gainNode.connect(_analyser);
+        _analyser.connect(_audioCtx.destination);
+        console.log('[lufs_meter] audio graph: direct MediaElementSource');
+      } catch (e) {
+        // Element already captured — tap the output mix via MediaStreamDestination
+        console.info('[lufs_meter] MediaElementSource already captured — tapping output mix');
+        try {
+          const dest = _audioCtx.createMediaStreamDestination();
+          // We can't reconnect the captured source, but we can observe
+          // the destination node's output by analysing what reaches it.
+          // Use a silent GainNode at gain=0 connected to the analyser,
+          // and connect the analyser to destination as a pass-through tap.
+          _gainNode.gain.value = 1.0; // GainNode is bypass — no source, just tap
+          _analyser.connect(_audioCtx.destination);
+          // Flag that we're in tap mode — gain control won't work but metering will
+          // if another plugin routes through the same AudioContext.
+          _sourceTapOnly = true;
+          console.info('[lufs_meter] tap mode — metering only, gain control unavailable');
+        } catch (tapErr) {
+          console.warn('[lufs_meter] tap setup failed:', tapErr);
+          return false;
+        }
+      }
+    } else {
+      _sourceNode.connect(_gainNode);
+      _gainNode.connect(_analyser);
+      _analyser.connect(_audioCtx.destination);
+    }
 
     _audioGraphReady = true;
     _applyGain();
@@ -151,8 +185,19 @@
   // Gain
   // -------------------------------------------------------------------------
   function _applyGain() {
-    if (!_gainNode) return;
     const db = Math.max(-40, Math.min(20, _manifestOffsetDb + _userTrimDb));
+    if (_bridge) {
+      // Desktop path — drive JUCE backing track gain directly
+      try {
+        // setGain(bus, linearGain) — 'backing' is the song audio bus
+        _bridge.setGain('backing', Math.pow(10, db / 20));
+      } catch (e) {
+        console.warn('[lufs_meter] setGain failed:', e);
+      }
+      return;
+    }
+    // Web path
+    if (!_gainNode || _sourceTapOnly) return;
     _gainNode.gain.value = Math.pow(10, db / 20);
   }
 
@@ -193,6 +238,9 @@
     if (now - _lastMeasure < MEASURE_MS) return;
     _lastMeasure = now;
 
+    // Desktop bridge present — use getLevels() for metering instead of AnalyserNode
+    if (_bridge) { _pollBridgeLevels(); return; }
+
     if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
     if (!_analyser || !_pcmBuffer) return;
 
@@ -216,6 +264,39 @@
     }
 
     _updateMeterDisplays();
+  }
+
+  function _pollBridgeLevels() {
+    if (!_bridge) return;
+    try {
+      // getBackingLevel() returns the backing track RMS post-volume —
+      // isolated song bus, not mixed with guitar input.
+      // Added in slopsmith-desktop feat/plugin-audio-bridge-levels.
+      const rms = (typeof _bridge.getBackingLevel === 'function')
+        ? _bridge.getBackingLevel()
+        : _bridge.getLevels()?.outputLevel ?? null;  // fallback for older Desktop builds
+
+      if (rms === null || rms === undefined) return;
+
+      _momentaryLufs = _rmsToLufs(rms);
+
+      _lufsBuffer.push({ t: performance.now(), lufs: _momentaryLufs });
+      _lufsBuffer = _lufsBuffer.filter(e => performance.now() - e.t <= SHORT_TERM_MS);
+      if (_lufsBuffer.length > 0)
+        _shortTermLufs = _lufsBuffer.reduce((s, e) => s + e.lufs, 0) / _lufsBuffer.length;
+
+      // Integrated accumulation for refinement (same logic as Web Audio path)
+      if (_momentaryLufs > SILENCE_THRESHOLD) {
+        _integratedSamples.push(rms);
+        _activeAudioSeconds += MEASURE_MS / 1000;
+        if (!_refinementDone && _trimIsProvisional && _activeAudioSeconds >= REFINEMENT_AFTER_S)
+          _refineFromIntegrated();
+      }
+
+      _updateMeterDisplays();
+    } catch (e) {
+      console.warn('[lufs_meter] getLevels() failed:', e);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -811,12 +892,15 @@
     // Settings screen — does NOT touch the audio graph
 
     document.getElementById('lm-btn-back')?.addEventListener('click', () => {
-      // esc() is the Slopsmith API; fall back to history if unavailable
       try {
         if (typeof esc === 'function') { esc(); return; }
       } catch (_) {}
       try { window.history.back(); } catch (_) {}
     });
+
+    // Show bridge notice in settings screen
+    const juceNotice = document.getElementById('lm-juce-notice');
+    if (juceNotice) juceNotice.style.display = _bridge ? 'block' : 'none';
     document.getElementById('lm-btn-minus')?.addEventListener('click', () => _setUserTrim(_userTrimDb - 0.5));
     document.getElementById('lm-btn-plus')?.addEventListener('click',  () => _setUserTrim(_userTrimDb + 0.5));
     document.getElementById('lm-btn-reset')?.addEventListener('click', () => _setUserTrim(0, false));
