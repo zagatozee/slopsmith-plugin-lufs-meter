@@ -168,10 +168,4 @@
 
 </div>
 
-<script>
-  // Called each time this screen becomes active.
-  // _lufs_meter_init_screen is defined in screen.js which loads before this runs.
-  if (typeof window._lufs_meter_init_screen === 'function') {
-    window._lufs_meter_init_screen();
-  }
-</script>
+<!-- screen.js is loaded after this HTML by Slopsmith and calls _lufs_meter_init_screen() directly -->

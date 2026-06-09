@@ -231,6 +231,6 @@ def setup(app, context):
 
     @app.get("/api/plugins/lufs_meter/status")
     def status():
-        return {"version": "1.0.0"}
+        return {"version": "1.5.1"}
 
     log.info("LUFS Meter plugin ready")

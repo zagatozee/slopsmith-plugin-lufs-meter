@@ -1,5 +1,5 @@
 /**
- * LUFS Meter — screen.js  v1.5.0
+ * LUFS Meter — screen.js  v1.5.1
  *
  * Gain chain:  <audio> → MediaElementSourceNode → GainNode → AnalyserNode → destination
  * Total gain = manifestOffsetDb + userTrimDb
@@ -730,5 +730,10 @@
   // If a song is already playing when we load (e.g. plugin installed mid-session),
   // try to connect to the existing audio element now
   _setupAudioGraph();
+
+  // screen.js is loaded after screen.html is injected into the DOM.
+  // Call init directly here — the HTML elements are guaranteed to exist at this point.
+  // (The inline <script> in screen.html was removed because it ran before screen.js loaded.)
+  _lufs_meter_init_screen();
 
 })();
