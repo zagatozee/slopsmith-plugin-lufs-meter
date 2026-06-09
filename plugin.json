@@ -1,0 +1,52 @@
+{
+  "id": "lufs_meter",
+  "name": "LUFS Meter",
+  "version": "1.5.0",
+
+  "nav": {
+    "label": "LUFS Meter",
+    "screen": "plugin-lufs_meter"
+  },
+  "screen":  "screen.html",
+  "script":  "screen.js",
+  "routes":  "routes.py",
+
+  "settings": {
+    "html": "settings.html",
+    "server_files": ["lufs_meter.db"]
+  },
+
+  "diagnostics": {
+    "server_files": ["lufs_meter.db"]
+  },
+
+  "capability_api": {
+    "standard": "capability-pipelines.v1",
+    "version": 1
+  },
+
+  "capabilities": {
+    "audio.playback": {
+      "roles": ["observer"],
+      "observes": ["song:play", "song:pause", "song:ended", "song:seek"],
+      "description": "Observes song lifecycle events to drive live LUFS metering and integrated loudness refinement.",
+      "mode": "active",
+      "compatibility": "degrade-noop"
+    },
+    "audio.gain": {
+      "roles": ["provider"],
+      "commands": ["set_gain"],
+      "description": "Applies per-song dB gain via a Web Audio GainNode. Also reads and applies PSARC SongVolume offsets that Slopsmith does not apply itself.",
+      "mode": "active",
+      "ownership": "multi-provider",
+      "safety": "safe"
+    },
+    "library.cards": {
+      "roles": ["observer"],
+      "observes": ["card:hover", "card:focus"],
+      "description": "Pre-analyses audio loudness on library card hover so gain is set before first play.",
+      "mode": "optional",
+      "compatibility": "degrade-noop"
+    }
+  }
+}

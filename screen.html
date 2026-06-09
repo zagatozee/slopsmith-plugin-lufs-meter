@@ -1,0 +1,177 @@
+<!-- LUFS Meter — screen.html  v1.4.0 -->
+
+<div style="max-width:560px;margin:0 auto;padding:24px 16px;color:#d1d5db;">
+
+  <!-- Header with back button -->
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+    <!-- esc() is the correct Slopsmith API to return to the previous screen -->
+    <button id="lm-btn-back"
+      style="padding:6px 12px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+        color:#9ca3af;font-size:12px;cursor:pointer;flex-shrink:0;">← Back</button>
+    <div style="font-size:22px;">📊</div>
+    <div>
+      <div style="font-size:18px;font-weight:700;color:#f3f4f6;">LUFS Meter</div>
+      <div style="font-size:12px;color:#6b7280;">Background analysis · PSARC normalisation · integrated refinement</div>
+    </div>
+    <div id="lm-format" style="margin-left:auto;font-size:11px;text-transform:uppercase;
+      letter-spacing:.05em;color:#4080e0;background:#1e3a5f;padding:2px 8px;border-radius:999px;">–</div>
+  </div>
+
+  <!-- Live meter -->
+  <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:12px;">Live metering</div>
+    <div style="display:flex;gap:24px;margin-bottom:14px;">
+      <div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Momentary</div>
+        <div id="lm-momentary" style="font-size:28px;font-weight:700;font-family:ui-monospace,monospace;color:#6b7280;">– LUFS</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Short-term (3 s)</div>
+        <div id="lm-short-term" style="font-size:28px;font-weight:700;font-family:ui-monospace,monospace;color:#6b7280;">– LUFS</div>
+      </div>
+    </div>
+    <div style="position:relative;height:10px;background:#1f2937;border-radius:5px;margin-bottom:8px;overflow:visible;">
+      <div style="position:absolute;inset:0;overflow:hidden;border-radius:5px;">
+        <div id="lm-bar" style="height:100%;width:0%;border-radius:5px;background:#22c55e;transition:width .4s,background .4s;"></div>
+      </div>
+      <div id="lm-target-line" style="display:none;position:absolute;top:-3px;bottom:-3px;width:2px;
+        background:#e8c040;border-radius:1px;transform:translateX(-50%);pointer-events:none;"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#4b5563;">
+      <span>–40</span><span>–30</span><span>–20</span><span>–16</span><span>–14</span><span>–6</span>
+    </div>
+  </div>
+
+  <!-- Global target -->
+  <div style="background:#111827;border:1px solid #374151;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:#f3f4f6;">Global loudness target</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:3px;line-height:1.5;">
+          Analyses songs in the background while you browse. Samples the audio file before
+          first play so gain is set immediately. Refines from integrated loudness after 60 s.
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex-shrink:0;margin-left:16px;margin-top:2px;">
+        <input id="lm-override-toggle" type="checkbox"
+          style="width:18px;height:18px;accent-color:#4080e0;cursor:pointer;" />
+        <span style="font-size:12px;color:#9ca3af;white-space:nowrap;">Enable</span>
+      </label>
+    </div>
+
+    <div id="lm-override-controls" style="opacity:0.4;transition:opacity .2s;">
+      <div style="font-size:11px;color:#6b7280;margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;">Presets</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+        <button data-lufs-preset="-16"
+          style="padding:7px 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+            color:#d1d5db;font-size:12px;cursor:pointer;text-align:left;line-height:1.5;">
+          <strong>–16 LUFS</strong><br><span style="font-size:10px;color:#6b7280;">Rocksmith CDLC tools</span>
+        </button>
+        <button data-lufs-preset="-14"
+          style="padding:7px 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+            color:#d1d5db;font-size:12px;cursor:pointer;text-align:left;line-height:1.5;">
+          <strong>–14 LUFS</strong><br><span style="font-size:10px;color:#6b7280;">Spotify / YouTube</span>
+        </button>
+        <button data-lufs-preset="-16"
+          style="padding:7px 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+            color:#d1d5db;font-size:12px;cursor:pointer;text-align:left;line-height:1.5;">
+          <strong>–16 LUFS</strong><br><span style="font-size:10px;color:#6b7280;">Apple Music</span>
+        </button>
+        <button data-lufs-preset="-23"
+          style="padding:7px 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;
+            color:#d1d5db;font-size:12px;cursor:pointer;text-align:left;line-height:1.5;">
+          <strong>–23 LUFS</strong><br><span style="font-size:10px;color:#6b7280;">EBU R128</span>
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:12px;color:#6b7280;">Custom:</span>
+        <input id="lm-override-target" type="number" step="0.5" min="-40" max="-6"
+          style="width:70px;text-align:center;background:#0f172a;border:1px solid #374151;color:#f3f4f6;
+            font-family:ui-monospace,monospace;font-size:14px;border-radius:8px;padding:5px 0;outline:none;" />
+        <span style="font-size:12px;color:#6b7280;">LUFS</span>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;flex-wrap:wrap;gap:6px;">
+      <div id="lm-override-status" style="font-size:11px;color:#4b5563;">Global override off</div>
+      <div id="lm-queue-size" style="font-size:11px;color:#4b5563;font-family:ui-monospace,monospace;"></div>
+    </div>
+  </div>
+
+  <!-- Current song status -->
+  <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px 20px;margin-bottom:16px;">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:10px;">Current song</div>
+    <div id="lm-preflight-status"
+      style="font-size:12px;font-family:ui-monospace,monospace;color:#9ca3af;display:none;margin-bottom:8px;"></div>
+    <span id="lm-provisional-badge"
+      style="display:none;font-size:11px;color:#e8c040;background:#2d2500;padding:2px 8px;border-radius:999px;"></span>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+      <button id="lm-btn-remeasure"
+        style="padding:5px 12px;border-radius:7px;border:1px solid #374151;background:#1f2937;
+          color:#9ca3af;font-size:11px;cursor:pointer;">Re-sample audio file</button>
+      <button id="lm-btn-normalise"
+        style="padding:5px 12px;border-radius:7px;border:1px solid #374151;background:#1f2937;
+          color:#9ca3af;font-size:11px;cursor:pointer;">Normalise from live meter</button>
+    </div>
+  </div>
+
+  <!-- Applied gain breakdown -->
+  <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:14px;">Applied gain</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:13px;">
+      <div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">PSARC SongVolume</div>
+        <div id="lm-manifest-offset" style="font-weight:700;font-family:ui-monospace,monospace;color:#6b7280;">0.0 dB</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:2px;">from manifest</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Trim</div>
+        <div id="lm-user-trim" style="font-weight:700;font-family:ui-monospace,monospace;color:#4080e0;">0.0 dB</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:2px;">saved per song</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Total</div>
+        <div id="lm-total-offset" style="font-weight:700;font-family:ui-monospace,monospace;color:#f3f4f6;">0.0 dB</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:2px;">applied now</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual trim -->
+  <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:14px;">Manual trim</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="lm-btn-minus" style="width:36px;height:36px;border-radius:8px;border:1px solid #374151;
+        background:#1f2937;color:#d1d5db;font-size:20px;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;">−</button>
+      <input id="lm-trim-input" type="number" step="0.1" min="-20" max="20"
+        style="width:74px;text-align:center;background:#0f172a;border:1px solid #374151;color:#f3f4f6;
+          font-family:ui-monospace,monospace;font-size:16px;border-radius:8px;padding:6px 0;outline:none;" />
+      <span style="font-size:12px;color:#6b7280;">dB</span>
+      <button id="lm-btn-plus" style="width:36px;height:36px;border-radius:8px;border:1px solid #374151;
+        background:#1f2937;color:#d1d5db;font-size:20px;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;">+</button>
+      <button id="lm-btn-reset" style="margin-left:8px;padding:6px 14px;border-radius:8px;
+        border:1px solid #374151;background:#1f2937;color:#9ca3af;font-size:12px;cursor:pointer;">Reset</button>
+    </div>
+    <div style="font-size:11px;color:#4b5563;margin-top:10px;">Saves permanently for this song.</div>
+  </div>
+
+  <!-- Legend -->
+  <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#6b7280;">
+    <span><span style="color:#60a5fa;">■</span> Quiet</span>
+    <span><span style="color:#22c55e;">■</span> Near target</span>
+    <span><span style="color:#f59e0b;">■</span> Above</span>
+    <span><span style="color:#ef4444;">■</span> Very loud</span>
+    <span><span style="color:#e8c040;">│</span> Target</span>
+  </div>
+
+</div>
+
+<script>
+  // Called each time this screen becomes active.
+  // _lufs_meter_init_screen is defined in screen.js which loads before this runs.
+  if (typeof window._lufs_meter_init_screen === 'function') {
+    window._lufs_meter_init_screen();
+  }
+</script>
